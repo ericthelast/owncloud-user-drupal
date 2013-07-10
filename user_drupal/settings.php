@@ -21,11 +21,9 @@
  *
  */
 $params = array(
-		'drupal_db_host',
-		'drupal_db_user',
-		'drupal_db_password',
-		'drupal_db_name',
-		'drupal_db_prefix'
+  'drupal_rest_uri',
+  'drupal_rest_username',
+  'drupal_rest_password',
 );
 
 if ($_POST) {
@@ -38,10 +36,8 @@ if ($_POST) {
 
 // fill template
 $tmpl = new OC_Template( 'user_drupal', 'settings');
-$tmpl->assign( 'drupal_db_host', OC_Appconfig::getValue('user_drupal', 'drupal_db_host', 'localhost'));
-$tmpl->assign( 'drupal_db_name', OC_Appconfig::getValue('user_drupal', 'drupal_db_name', ''));
-$tmpl->assign( 'drupal_db_user', OC_Appconfig::getValue('user_drupal', 'drupal_db_user', ''));
-$tmpl->assign( 'drupal_db_password', OC_Appconfig::getValue('user_drupal', 'drupal_db_password', ''));
-$tmpl->assign( 'drupal_db_prefix', OC_Appconfig::getValue('user_drupal', 'drupal_db_prefix', ''));
+$tmpl->assign( 'drupal_rest_uri', OC_Appconfig::getValue('user_drupal', 'drupal_rest_uri', ''));
+$tmpl->assign( 'drupal_rest_username', OC_Appconfig::getValue('user_drupal', 'drupal_rest_username', ''));
+$tmpl->assign( 'drupal_rest_password', OC_Appconfig::getValue('user_drupal', 'drupal_rest_password', ''));
 
 return $tmpl->fetchPage();
