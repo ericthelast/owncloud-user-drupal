@@ -20,7 +20,7 @@
  * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-
+require('vendor/nategood/httpful/bootstrap.php');
 class OC_User_drupal extends OC_User_Backend {
 	protected $drupal_db_host;
 	protected $drupal_db_name;
@@ -51,6 +51,28 @@ class OC_User_drupal extends OC_User_Backend {
 		$this->db_conn = true;
 		$this->drupal_db_prefix = $this->db->real_escape_string($this->drupal_db_prefix);
 	}
+
+  private function sendMMHRest($endpoint, $method = 'get', $data = NULL) {
+    $uri = 'http://mymohistory.org/rest/';
+    $response = \Httpful\Request::post($uri . 'user/login.json')
+      ->body(array(
+        'username' => 'admin',
+        'password' => 'tw0htbc',
+      ))
+      ->sendsJson()
+      ->send();
+    $body = $response->body;
+    switch($method) {
+      case 'get':
+      default:
+        $response = \Httpful\Request::get($uri . $endpoint . '.json')->addHeader('Cookie', $body->session_name . '=' . $body->sessid)->send();
+      break;
+      case 'post':
+        $response = \Httpful\Request::post($uri . $endpoint . '.json')->addHeader('Cookie', $body->session_name . '=' . $body->sessid)->body($data)->send();
+      break;
+    }
+    return $response->body;
+  }
 
 	/**
 	 * @brief Set email address
@@ -97,21 +119,15 @@ class OC_User_drupal extends OC_User_Backend {
 	 *
 	 * Get a list of all users
 	 */
-	public function getUsers() {
+	public function getUsers($search = '', $limit = null, $offset = null) {
 		$users = array();
-		if (!$this->db_conn) {
-			return $users;
-		}
-
-		$q = 'SELECT name FROM '. $this->drupal_db_prefix .'users WHERE status = 1';
-		$result = $this->db->query($q);
-		while ($row = $result->fetch_assoc()) {
-			if(!empty($row['name'])) {
-				$users[] = $row['name'];
-			}
-		}
+    if($response = $this->sendMMHRest('user', 'get', array('pagesize' => 1))) {
+      foreach($response as $row) {
+        $users[] = $row->name;
+      }
+    }
 		sort($users);
-		return $users;
+    return $users;
 	}
 
 	/**
@@ -123,6 +139,11 @@ class OC_User_drupal extends OC_User_Backend {
 		if (!$this->db_conn) {
 			return false;
 		}
+
+    if($response = $this->sendMMHRest('user', 'get', array('parameters' => array('name' => $uid)))) {
+      return count($response) > 0;
+    }
+    return FALSE;
 
 		$q = 'SELECT name FROM '. $this->drupal_db_prefix .'users WHERE name = "'. $this->db->real_escape_string($uid) .'" AND status = 1';
 		$result = $this->db->query($q);
