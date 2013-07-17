@@ -20,52 +20,98 @@
  * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-
+require('vendor/nategood/httpful/bootstrap.php');
 class OC_User_drupal extends OC_User_Backend {
-	protected $drupal_db_host;
-	protected $drupal_db_name;
-	protected $drupal_db_user;
-	protected $drupal_db_password;
-	protected $drupal_db_prefix;
-	protected $db;
-	protected $db_conn;
+  protected $drupal_rest_uri;
+  private $drupal_rest_username;
+  private $drupal_rest_password;
+  private $drupal_rest_session;
 
 	function __construct() {
-		$this->db_conn = false;
-		$this->drupal_db_host = OC_Appconfig::getValue('user_drupal', 'drupal_db_host','');
-		$this->drupal_db_name = OC_Appconfig::getValue('user_drupal', 'drupal_db_name','');
-		$this->drupal_db_user = OC_Appconfig::getValue('user_drupal', 'drupal_db_user','');
-		$this->drupal_db_password = OC_Appconfig::getValue('user_drupal', 'drupal_db_password','');
-		$this->drupal_db_prefix = OC_Appconfig::getValue('user_drupal', 'drupal_db_prefix','');
+		$this->drupal_rest_session = FALSE;
+		$this->drupal_rest_uri = OC_Appconfig::getValue('user_drupal', 'drupal_rest_uri','');
+		$this->drupal_rest_username = OC_Appconfig::getValue('user_drupal', 'drupal_rest_username','');
+		$this->drupal_rest_password = OC_Appconfig::getValue('user_drupal', 'drupal_rest_password','');
 
-		$errorlevel = error_reporting();
-		error_reporting($errorlevel & ~E_WARNING);
-		$this->db = new mysqli($this->drupal_db_host, $this->drupal_db_user, $this->drupal_db_password, $this->drupal_db_name);
-		error_reporting($errorlevel);
-		if ($this->db->connect_errno) {
-			OC_Log::write('OC_User_drupal',
-					'OC_User_drupal, Failed to connect to drupal database: ' . $this->db->connect_error,
-					OC_Log::ERROR);
-			return false;
-		}
-		$this->db_conn = true;
-		$this->drupal_db_prefix = $this->db->real_escape_string($this->drupal_db_prefix);
+    if($result = $this->mhmRestLogin($this->drupal_rest_username, $this->drupal_rest_password)) {
+      $this->drupal_rest_session = (object) array(
+        'session_name' => $result->session_name,
+        'sessid' => $result->sessid,
+      );
+    } else {
+      OC_Log::write('OC_User_drupal',
+        'OC_User_drupal, Failed to login to rest server',
+        OC_Log::ERROR);
+      return FALSE;
+    }
 	}
+
+  /**
+   * Log into rest server with supplied creds.
+   *
+   * @param (string) The username to log in with.
+   * @param (string) The user's password.
+   * 
+   * @return (object or FALSE) The body of the response.
+   */
+  private function mhmRestLogin($username, $password) {
+    try {
+      $response = \Httpful\Request::post($this->drupal_rest_uri . 'user/login.json')
+        ->body(array(
+          'username' => $username,
+          'password' => $password,
+        ))
+        ->sendsJson()
+        ->send();
+      return $response->body;
+    } catch(Exception $e) {
+      OC_log::write('OC_User_drupal', 'OC_User_drupal, Failed to log in with supplied credentials. Error details: ' . $e->getMessage(), OC_Log::ERROR);
+      return FALSE;
+    }
+  }
+
+  private function sendMMHRest($endpoint, $method = 'get', $data = NULL) {
+    if(!$this->drupal_rest_session) {
+      return FALSE;
+    }
+    $uri = $this->drupal_rest_uri;
+    try {
+      switch($method) {
+        case 'get':
+        default:
+          $uri .= $endpoint;
+          if(!empty($data)) {
+            $uri .= '?' . http_build_query($data, NULL, '&');
+          }
+          $response = \Httpful\Request::get($uri)->addHeader('Cookie', $this->drupal_rest_session->session_name . '=' . $this->drupal_rest_session->sessid)->sendsAndExpects('json')->send();
+        break;
+        case 'post':
+          $response = \Httpful\Request::post($uri . $endpoint)->addHeader('Cookie', $this->drupal_rest_session->session_name . '=' . $this->drupal_rest_session->sessid)->body($data)->sendsAndExpects('json')->send();
+        break;
+      }
+      return $response->body;
+    } catch(Exception $e) {
+      OC_log::write('OC_User_drupal', 'OC_User_drupal, REST request failed. Error details: ' . $e->getMessage(), OC_Log::ERROR);
+      return FALSE;
+    }
+  }
 
 	/**
 	 * @brief Set email address
 	 * @param $uid The username
 	 */
 	private function setEmail($uid) {
-		if (!$this->db_conn) {
-			return false;
-		}
-
-		$q = 'SELECT mail FROM '. $this->drupal_db_prefix .'users WHERE name = "'. $this->db->real_escape_string($uid) .'" AND status = 1';
-		$result = $this->db->query($q);
-		$email = $result->fetch_assoc();
-		$email = $email['mail'];
-		OC_Preferences::setValue($uid, 'settings', 'email', $email);
+    if(!$this->drupal_rest_session) {
+      return FALSE;
+    }
+    $params = array(
+      'pagesize' => 1,
+      'fields' => 'mail',
+      'parameters' => array('name' => $uid, 'status' => 1),
+    );
+    if($response = $this->sendMMHRest('user', 'get', $params)) {
+      OC_Preferences::setValue($uid, 'settings', 'email', $response[0]->mail);
+    }
 	}
 
 	/**
@@ -75,20 +121,18 @@ class OC_User_drupal extends OC_User_Backend {
 	 * @returns true/false
 	 */
 	public function checkPassword($uid, $password){
-		if (!$this->db_conn) {
-			return false;
-		}
+    if(!$this->drupal_rest_session) {
+      return FALSE;
+    } 
+    if($response = $this->mhmRestLogin($uid, $password)) {
+      if(is_object($response) && !empty($response->user->name) && $response->user->name == $uid) {
+        return $response->user->name;
+      } else {
+        return FALSE;
+      }
+    }
 
-		$query = 'SELECT name FROM '. $this->drupal_db_prefix .'users WHERE name = "' . $this->db->real_escape_string($uid) . '" AND status = 1';
-		$query .= ' AND pass = "' . md5($this->db->real_escape_string($password)) . '"';
-		$result = $this->db->query($query);
-		$row = $result->fetch_assoc();
-
-		if ($row) {
-			$this->setEmail($uid);
-			return $row['name'];
-		}
-		return false;
+    return FALSE;
 	}
 
 	/**
@@ -97,21 +141,23 @@ class OC_User_drupal extends OC_User_Backend {
 	 *
 	 * Get a list of all users
 	 */
-	public function getUsers() {
+	public function getUsers($search = '', $limit = null, $offset = null) {
 		$users = array();
-		if (!$this->db_conn) {
-			return $users;
-		}
-
-		$q = 'SELECT name FROM '. $this->drupal_db_prefix .'users WHERE status = 1';
-		$result = $this->db->query($q);
-		while ($row = $result->fetch_assoc()) {
-			if(!empty($row['name'])) {
-				$users[] = $row['name'];
-			}
-		}
-		sort($users);
-		return $users;
+    $params = array(
+      'page' => ($offset > 0) ? $offset / $limit : 0,
+      'pagesize' => $limit,
+      'fields' => 'name,mail',
+      'parameters' => array('status' => 1),
+      'sort' => array(
+        array('name'),
+      ),
+    );
+    if($response = $this->sendMMHRest('user', 'get', $params)) {
+      foreach($response as $row) {
+        $users[] = $row->name;
+      }
+    }
+    return $users;
 	}
 
 	/**
@@ -120,9 +166,14 @@ class OC_User_drupal extends OC_User_Backend {
 	 * @return boolean
 	 */
 	public function userExists($uid) {
-		if (!$this->db_conn) {
-			return false;
-		}
+    if(!$this->drupal_rest_session) {
+      return FALSE;
+    } 
+
+    if($response = $this->sendMMHRest('user', 'get', array('parameters' => array('name' => $uid)))) {
+      return count($response) > 0;
+    }
+    return FALSE;
 
 		$q = 'SELECT name FROM '. $this->drupal_db_prefix .'users WHERE name = "'. $this->db->real_escape_string($uid) .'" AND status = 1';
 		$result = $this->db->query($q);
